@@ -1,0 +1,66 @@
+# AntriSehat — Docker Compose (PRD 2.4 & 2.8)
+#
+#   app       : Laravel + Apache, publish 8000:80, network frontend + backend
+#   db        : MySQL 8.4, hanya di network backend (internal, tanpa port publik)
+#   scheduler : image yang sama dengan app, menjalankan `php artisan schedule:work`
+#
+# Semua konfigurasi dibaca dari .env (salin dari .env.example).
+
+name: antrisehat
+
+x-app-image: &app-image
+  image: ${DOCKERHUB_USER:-antrisehat}/antrisehat-app:${IMAGE_TAG:-latest}
+  env_file: .env
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  app:
+    <<: *app-image
+    build:
+      context: .
+      target: production
+    ports:
+      - "8000:80"
+    networks:
+      - frontend
+      - backend
+
+  scheduler:
+    <<: *app-image
+    command: ["php", "artisan", "schedule:work"]
+    user: www-data
+    healthcheck:
+      disable: true
+    networks:
+      - backend
+
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-antrisehat}
+      MYSQL_USER: ${DB_USERNAME:-antrisehat}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD wajib diisi di .env}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD wajib diisi di .env}
+      TZ: ${APP_TIMEZONE:-Asia/Jakarta}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - backend
+
+networks:
+  frontend:
+  backend:
+    internal: true
+
+volumes:
+  db-data:

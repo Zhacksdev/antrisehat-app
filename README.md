@@ -75,9 +75,10 @@ image, deployment, hingga smoke testing.
                                       lewat.
   -----------------------------------------------------------------------
 
-> **Catatan:** Daftar fitur di atas merupakan cakupan produk berdasarkan
-> PRD. Ketersediaan implementasi aktual perlu diverifikasi terhadap
-> repository.
+> **Status:** seluruh fitur wajib PRD sudah diimplementasikan. UI memakai
+> Blade sederhana; setiap endpoint juga mengembalikan JSON bila request
+> mengirim header `Accept: application/json`. Autentikasi sengaja tidak
+> dibuat (sesuai rekomendasi PRD bagian 9) agar fokus ke pipeline.
 
 ## 🧰 Tech Stack
 
@@ -93,8 +94,9 @@ image, deployment, hingga smoke testing.
   Docker Hub       ---                Container image registry
   Ngrok            ---                Public access for Jenkins webhook/demo
 
-Versi dan konfigurasi aktual harus mengikuti kondisi repository apabila
-berbeda dari rekomendasi PRD.
+Repository memakai Laravel 12 dengan `config.platform.php = 8.3.0` di
+`composer.json`, sehingga `composer.lock` selalu kompatibel dengan image
+`php:8.3-apache` walaupun developer memakai PHP lokal yang lebih baru.
 
 ## 🏗️ System Architecture
 
@@ -148,17 +150,22 @@ port ke publik. - Service scheduler tidak membutuhkan port publik.
 
 ## 📂 Project Structure
 
-Struktur target repository berdasarkan PRD:
+Struktur repository (Laravel berada di root, sesuai PRD 2.3):
 
 ``` text
 antrisehat-app/
-├── app/                    # Laravel application logic
+├── app/
+│   ├── Console/Commands/   # antrean:reset
+│   ├── Enums/              # StatusAntrean, StatusJanjiTemu
+│   ├── Http/Controllers/   # Health, Antrean, JanjiTemu, Dokter, JadwalDokter
+│   ├── Models/
+│   └── Services/           # AntreanService, JanjiTemuService, KuotaSesiService
 ├── bootstrap/
 ├── config/
 ├── database/
 │   ├── migrations/
 │   └── seeders/
-├── docker/                 # Supporting Docker configuration
+├── docker/                 # apache vhost & php.ini
 ├── public/
 ├── resources/
 ├── routes/
@@ -172,9 +179,6 @@ antrisehat-app/
 ├── .gitignore
 └── README.md
 ```
-
-> Struktur ini merupakan struktur yang direncanakan dalam PRD. Sesuaikan
-> dokumentasi dengan struktur aktual repository.
 
 ## 🚀 Getting Started
 
@@ -411,9 +415,25 @@ Endpoint yang direncanakan dalam PRD:
                                                   dokter.
   -----------------------------------------------------------------------
 
-> Endpoint di atas merupakan rancangan awal, bukan jaminan bahwa seluruh
-> route sudah tersedia. Periksa `routes/web.php` dan `routes/api.php`
-> untuk implementasi aktual.
+Semua route berada di `routes/web.php`. Halaman tambahan: `GET /`
+(ambil & panggil antrean) dan `GET /janji-temu` (form + daftar janji temu).
+
+Contoh request JSON:
+
+``` bash
+# Ambil nomor antrean
+curl -X POST http://localhost:8000/antrean   -H "Accept: application/json" -d "poli_id=1"
+
+# Panggil antrean berikutnya
+curl -X POST http://localhost:8000/antrean/panggil   -H "Accept: application/json" -d "poli_id=1"
+
+# Buat janji temu (jam_selesai opsional, default 15 menit)
+curl -X POST http://localhost:8000/janji-temu -H "Accept: application/json"   -d "jadwal_dokter_id=1&tanggal=2026-11-23&jam_mulai=08:00&nama=Budi&no_hp=0811111111"
+```
+
+Endpoint `POST /antrean`, `/antrean/panggil`, dan `/janji-temu`
+dikecualikan dari CSRF (lihat `bootstrap/app.php`) karena aplikasi tidak
+memakai autentikasi, sehingga dapat dipanggil langsung lewat curl.
 
 ## 🧪 Testing
 
@@ -455,9 +475,21 @@ memastikan aplikasi tetap berjalan sesuai kebutuhan.
                                lama.                 kedaluwarsa.
   ------------------------------------------------------------------------
 
-Jalankan test Laravel:
+Seluruh skenario di atas (plus test 503 untuk `/health`, CRUD, dan
+registrasi scheduler) ada di `tests/Feature`:
+
+  File                                  Cakupan
+  ------------------------------------- ---------------------------------
+  `HealthCheckTest.php`                 #1 (+ respons 503)
+  `AntreanTest.php`                     #2, #3, #7, antrean berjalan
+  `JanjiTemuTest.php`                   #4, #5, #6, kuota antrean + janji
+  `ResetAntreanCommandTest.php`         #8, jadwal scheduler
+  `DokterCrudTest.php`                  CRUD dokter & jadwal, halaman web
+
+Jalankan test Laravel (memakai SQLite in-memory dari `phpunit.xml`):
 
 ``` bash
+composer install
 php artisan test
 ```
 
@@ -491,6 +523,18 @@ flowchart LR
     H --> I["Smoke Test"]
 ```
 
+### Jenkins Credentials
+
+  ID                        Jenis                      Isi
+  ------------------------- -------------------------- -----------------------------
+  `dockerhub-credentials`   Username with password     Akun / access token Docker Hub
+  `antrisehat-env`          Secret file                File `.env` production
+
+Agent Jenkins membutuhkan Docker Engine + Docker Compose v2. Stage Smoke
+Test memanggil `http://localhost:8000/health`, sehingga deploy dan
+Jenkins harus berada di host Docker yang sama (bila Jenkins berjalan di
+dalam container, mount `/var/run/docker.sock` dan sesuaikan `HEALTH_URL`).
+
 ### Pipeline Stages
 
   -----------------------------------------------------------------------
@@ -498,9 +542,9 @@ flowchart LR
   ----------------------------------- -----------------------------------
   Checkout                            Mengambil source code dari GitHub.
 
-  Dependencies                        Menyiapkan dependency aplikasi.
-
-  Test                                Menjalankan automated tests.
+  Test                                `docker build --target test`:
+                                      install dependency lalu
+                                      menjalankan `php artisan test`.
 
   Build                               Membuat Docker image aplikasi.
 
@@ -549,6 +593,14 @@ Jadwal yang direncanakan pada Laravel:
 Schedule::command('antrean:reset')
     ->dailyAt('00:00')
     ->withoutOverlapping();
+```
+
+Jadwal dapat diubah lewat `ANTRISEHAT_RESET_CRON` di `.env`. Untuk demo,
+isi `ANTRISEHAT_RESET_CRON="* * * * *"` lalu restart scheduler agar job
+berjalan tiap menit. Reset manual:
+
+``` bash
+docker compose exec scheduler php artisan antrean:reset
 ```
 
 Periksa log scheduler untuk bukti eksekusi:
@@ -637,11 +689,19 @@ Dokumen acuan utama pengembangan:
 
 ## 🚧 Project Status
 
-AntriSehat merupakan proyek akademik yang dikembangkan secara bertahap.
-README ini mendokumentasikan ruang lingkup produk dan rancangan teknis
-berdasarkan PRD awal. Status implementasi, versi dependency, command,
-endpoint, serta konfigurasi aktual perlu diselaraskan dengan kondisi
-repository.
+  Area                                   Status
+  -------------------------------------- --------
+  Kerangka Laravel 12 + `/health`        ✅
+  Model data, migrasi, seeder            ✅
+  Fitur antrean, panggil, janji temu     ✅
+  CRUD dokter & jadwal praktik           ✅
+  Aturan bisnis + 18 test otomatis       ✅
+  Command `antrean:reset` + scheduler    ✅
+  Dockerfile multi-stage + compose       ✅
+  Jenkinsfile 6 stage + cron trigger     ✅
+  Setup Jenkins, Ngrok, webhook          ⏳ (konfigurasi server)
+
+PRD lengkap ada di folder [`docs/`](docs/).
 
 ------------------------------------------------------------------------
 
