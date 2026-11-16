@@ -1,4 +1,4 @@
-::: {align="center"}
+
 # 🏥 AntriSehat
 
 ### Smart Queue & Appointment Management for Primary Clinics
