@@ -645,8 +645,7 @@ repository.
 
 ------------------------------------------------------------------------
 
-::: {align="center"}
+
 **Built with ❤️ by Team K05**
 
 *AntriSehat --- Better Queue, Better Care.*
-:::
