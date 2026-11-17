@@ -1,0 +1,6 @@
+# Gabungkan dengan compose.yaml untuk build image production di mesin lokal.
+services:
+  app:
+    build:
+      context: .
+      target: production

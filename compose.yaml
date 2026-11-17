@@ -4,6 +4,7 @@
 #   db        : MySQL 8.4, hanya di network backend (internal, tanpa port publik)
 #   scheduler : image yang sama dengan app, menjalankan `php artisan schedule:work`
 #
+# Deployment memakai image dari registry. Build lokal memakai compose.local.yaml.
 # Semua konfigurasi dibaca dari .env (salin dari .env.example).
 
 name: antrisehat
@@ -19,9 +20,6 @@ x-app-image: &app-image
 services:
   app:
     <<: *app-image
-    build:
-      context: .
-      target: production
     ports:
       - "8000:80"
     networks:
@@ -31,6 +29,9 @@ services:
   scheduler:
     <<: *app-image
     command: ["php", "artisan", "schedule:work"]
+    environment:
+      # Kirim ringkasan job langsung ke stdout container.
+      ANTRISEHAT_SCHEDULER_OUTPUT: /proc/1/fd/1
     user: www-data
     healthcheck:
       disable: true
