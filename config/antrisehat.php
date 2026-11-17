@@ -10,4 +10,5 @@ return [
     // Jadwal cron untuk antrean:reset. Default tengah malam (dailyAt 00:00);
     // untuk demo scheduler bisa diisi "* * * * *".
     'reset_cron' => env('ANTRISEHAT_RESET_CRON', '0 0 * * *'),
+    'scheduler_output' => env('ANTRISEHAT_SCHEDULER_OUTPUT'),
 ];

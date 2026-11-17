@@ -172,7 +172,8 @@ antrisehat-app/
 ├── tests/                  # Automated tests
 ├── storage/
 ├── Dockerfile              # Multi-stage Docker build
-├── compose.yaml            # Application, database & scheduler
+├── compose.yaml            # Deploy image registry, database & scheduler
+├── compose.local.yaml      # Build image lokal
 ├── Jenkinsfile             # CI/CD pipeline definition
 ├── .dockerignore
 ├── .env.example
@@ -186,11 +187,7 @@ antrisehat-app/
 
 Pastikan perangkat telah memiliki:
 
--   PHP sesuai versi Laravel yang digunakan.
--   Composer 2.x.
--   MySQL 8.4 (untuk menjalankan tanpa Docker).
--   Docker Engine.
--   Docker Compose.
+-   Docker Engine dengan Linux containers dan Docker Compose.
 -   Git.
 
 ### 1. Clone Repository
@@ -227,44 +224,38 @@ DB_USERNAME=antrisehat
 DB_PASSWORD=change-this-password
 DB_ROOT_PASSWORD=change-this-root-password
 
-DOCKERHUB_USER=your-dockerhub-username
-IMAGE_TAG=latest
+DOCKERHUB_USER=antrisehat
+IMAGE_TAG=local
 ```
 
 > Gunakan secret yang kuat untuk deployment. Jangan commit file `.env`,
 > password, APP_KEY, atau credential ke repository.
 
-### 3. Build and Run Containers
+### 3. Build image lokal dan buat APP_KEY
 
 ``` bash
-docker compose up -d --build
+docker compose -f compose.yaml -f compose.local.yaml config --quiet
+docker build --target test -t antrisehat-app:test .
+docker compose -f compose.yaml -f compose.local.yaml build app
+docker compose run --rm --no-deps app php artisan key:generate --show
 ```
 
-Periksa status container:
+Salin nilai yang dicetak ke `APP_KEY` di `.env` saat setup pertama.
+Untuk deployment, `compose.yaml` memakai image dari Docker Hub dengan
+`DOCKERHUB_USER` dan `IMAGE_TAG` yang disediakan pipeline.
+
+### 4. Siapkan database dan jalankan stack lokal
 
 ``` bash
+docker compose up -d --wait db
+docker compose run --rm --no-deps app php artisan migrate --force
+docker compose run --rm --no-deps app php artisan db:seed --force
+docker compose up -d --pull never app scheduler
 docker compose ps
 ```
 
-Lihat log aplikasi:
-
-``` bash
-docker compose logs -f app
-```
-
-### 4. Run Database Migration
-
-Jalankan migrasi setelah database siap:
-
-``` bash
-docker compose run --rm app php artisan migrate --force
-```
-
-Jika seeder tersedia:
-
-``` bash
-docker compose run --rm app php artisan db:seed --force
-```
+Seeder mengisi data contoh untuk setup lokal. Untuk melihat log web,
+jalankan `docker compose logs -f app`.
 
 ### 5. Access the Application
 
@@ -587,27 +578,17 @@ Command reset antrean:
 php artisan antrean:reset
 ```
 
-Jadwal yang direncanakan pada Laravel:
-
-``` php
-Schedule::command('antrean:reset')
-    ->dailyAt('00:00')
-    ->withoutOverlapping();
-```
-
-Jadwal dapat diubah lewat `ANTRISEHAT_RESET_CRON` di `.env`. Untuk demo,
-isi `ANTRISEHAT_RESET_CRON="* * * * *"` lalu restart scheduler agar job
-berjalan tiap menit. Reset manual:
+Scheduler berjalan pada tengah malam sesuai `APP_TIMEZONE`. Untuk demo
+di database lokal, isi `ANTRISEHAT_RESET_CRON="* * * * *"` di `.env`:
 
 ``` bash
-docker compose exec scheduler php artisan antrean:reset
-```
-
-Periksa log scheduler untuk bukti eksekusi:
-
-``` bash
+docker compose up -d --pull never --force-recreate scheduler
 docker compose logs -f scheduler
 ```
+
+Tunggu log ringkasan `[antrean:reset]`. Sesudah demo, kembalikan jadwal
+ke `ANTRISEHAT_RESET_CRON="0 0 * * *"` dan jalankan lagi perintah
+`up` di atas agar container membaca jadwal harian.
 
 > Jenkins cron bertanggung jawab atas pipeline CI/CD terjadwal,
 > sedangkan Laravel scheduler bertanggung jawab atas pemrosesan antrean
