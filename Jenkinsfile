@@ -19,7 +19,7 @@ pipeline {
         IMAGE = 'devinaaa/antrisehat-app'
 
         IMAGE_TAG = "${env.BUILD_NUMBER}"
-        HEALTH_URL = 'http://localhost:8000/health'
+        HEALTH_URL = 'http://host.docker.internal:8000/health'
     }
 
     stages {
