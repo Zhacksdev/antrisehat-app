@@ -16,7 +16,7 @@ pipeline {
 
     environment {
         // GANTI dengan username Docker Hub kelompok
-        IMAGE = 'GANTI_USERNAME_DOCKERHUB/antrisehat-app'
+        IMAGE = 'devinaaa/antrisehat-app'
 
         IMAGE_TAG = "${env.BUILD_NUMBER}"
         HEALTH_URL = 'http://localhost:8000/health'
