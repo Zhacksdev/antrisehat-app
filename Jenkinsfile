@@ -1,19 +1,6 @@
-// AntriSehat — Jenkins CI/CD pipeline (PRD: 6 stage hijau)
-//   Checkout -> Test -> Build -> Push -> Deploy (+ migrasi) -> Smoke Test
-//
-// Jenkins Credentials yang dibutuhkan:
-//   - dockerhub-credentials : Username with password (akun Docker Hub)
-//   - antrisehat-env        : Secret file berisi .env production
-//
-// Agent wajib memiliki Docker Engine + Docker Compose v2 dan akses ke port 8000.
 
 pipeline {
     agent any
-
-    triggers {
-        githubPush()          // webhook GitHub (via Ngrok)
-        cron('H 1 * * *')     // build terjadwal tiap malam (tantangan K05)
-    }
 
     options {
         timestamps()
@@ -22,14 +9,22 @@ pipeline {
         timeout(time: 30, unit: 'MINUTES')
     }
 
+    triggers {
+        githubPush()
+        cron('H 1 * * *')
+    }
+
     environment {
-        IMAGE_NAME          = 'antrisehat-app'
-        IMAGE_TAG           = "${env.BUILD_NUMBER}"
-        COMPOSE_PROJECT_NAME = 'antrisehat'
-        HEALTH_URL          = 'http://localhost:8000/health'
+        // GANTI dengan username Docker Hub kelompok
+        IMAGE = 'GANTI_USERNAME_DOCKERHUB/antrisehat-app'
+
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
+        HEALTH_URL = 'http://localhost:8000/health'
     }
 
     stages {
+
+        // STAGE 1: CHECKOUT
         stage('Checkout') {
             steps {
                 checkout scm
@@ -37,85 +32,112 @@ pipeline {
             }
         }
 
+        // STAGE 2: TEST
         stage('Test') {
             steps {
-                // Stage `test` pada Dockerfile menjalankan `php artisan test`;
-                // build gagal bila ada test yang gagal.
-                sh 'docker build --target test -t ${IMAGE_NAME}:test .'
+                sh 'docker build --target test -t $IMAGE:test .'
             }
         }
 
-        stage('Build') {
+        // STAGE 3: BUILD IMAGE
+        stage('Build Image') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
-                                                  usernameVariable: 'DOCKERHUB_USER',
-                                                  passwordVariable: 'DOCKERHUB_PASS')]) {
-                    sh '''
-                        docker build --target production \
-                          -t "$DOCKERHUB_USER/$IMAGE_NAME:$IMAGE_TAG" \
-                          -t "$DOCKERHUB_USER/$IMAGE_NAME:latest" .
-                    '''
-                }
+                sh '''
+                    docker build --target production \
+                        -t "$IMAGE:$IMAGE_TAG" \
+                        -t "$IMAGE:latest" .
+                '''
             }
         }
 
-        stage('Push') {
+        // STAGE 4: PUSH IMAGE
+        stage('Push Image') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
-                                                  usernameVariable: 'DOCKERHUB_USER',
-                                                  passwordVariable: 'DOCKERHUB_PASS')]) {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DH_USER',
+                        passwordVariable: 'DH_PASS'
+                    )
+                ]) {
                     sh '''
-                        echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
-                        docker push "$DOCKERHUB_USER/$IMAGE_NAME:$IMAGE_TAG"
-                        docker push "$DOCKERHUB_USER/$IMAGE_NAME:latest"
+                        echo "$DH_PASS" | docker login \
+                            -u "$DH_USER" --password-stdin
+
+                        docker push "$IMAGE:$IMAGE_TAG"
+                        docker push "$IMAGE:latest"
                     '''
                 }
             }
+
             post {
-                always { sh 'docker logout || true' }
+                always {
+                    sh 'docker logout || true'
+                }
             }
         }
 
+        // STAGE 5: DEPLOY
         stage('Deploy') {
             steps {
                 withCredentials([
-                    usernamePassword(credentialsId: 'dockerhub-credentials',
-                                     usernameVariable: 'DOCKERHUB_USER',
-                                     passwordVariable: 'DOCKERHUB_PASS'),
-                    file(credentialsId: 'antrisehat-env', variable: 'ENV_FILE')
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DH_USER',
+                        passwordVariable: 'DH_PASS'
+                    ),
+                    file(
+                        credentialsId: 'antrisehat-env',
+                        variable: 'ENV_FILE'
+                    )
                 ]) {
                     sh '''
+                        # Siapkan environment
                         cp "$ENV_FILE" .env
-                        export DOCKERHUB_USER IMAGE_TAG
 
-                        # 1) Database dulu, tunggu sampai healthy
+                        export DOCKERHUB_USER="$DH_USER"
+                        export IMAGE_TAG="$BUILD_NUMBER"
+
+                        # Ambil image dari Docker Hub
+                        docker compose pull app scheduler
+
+                        # Jalankan database dan tunggu healthy
                         docker compose up -d --wait db
 
-                        # 2) Migrasi sebagai langkah terpisah (PRD 2.6) agar kegagalan terlihat di log
-                        docker compose run --rm --no-deps app php artisan migrate --force
-                        docker compose run --rm --no-deps app php artisan db:seed --force
+                        # Jalankan migrasi database
+                        docker compose run --rm --no-deps app \
+                            php artisan migrate --force
 
-                        # 3) Jalankan / perbarui app + scheduler dengan image build ini
-                        docker compose up -d --no-build --remove-orphans app scheduler
+                        # Jalankan aplikasi dan scheduler
+                        docker compose up -d --remove-orphans
+
+                        # Periksa container
                         docker compose ps
                     '''
                 }
             }
         }
 
+        // STAGE 6: SMOKE TEST
         stage('Smoke Test') {
             steps {
                 sh '''
-                    for i in $(seq 1 20); do
-                        if curl -fsS "$HEALTH_URL"; then
-                            echo ""
-                            echo "Smoke test OK"
+                    for i in $(seq 1 15); do
+
+                        code=$(curl -s -o /dev/null \
+                            -w "%{http_code}" "$HEALTH_URL" || true)
+
+                        if [ "$code" = "200" ]; then
+                            echo "Health OK"
+                            echo "Smoke Test BERHASIL"
                             exit 0
                         fi
-                        echo "Menunggu aplikasi siap... ($i/20)"
-                        sleep 3
+
+                        echo "Menunggu aplikasi ($i/15), HTTP $code"
+                        sleep 4
                     done
-                    echo "Smoke test GAGAL: $HEALTH_URL tidak mengembalikan 200"
+
+                    echo "Smoke Test GAGAL"
                     docker compose logs --tail=100 app
                     exit 1
                 '''
@@ -123,16 +145,31 @@ pipeline {
         }
     }
 
+    // POST ACTION
     post {
         always {
             sh 'rm -f .env || true'
-            sh 'docker image prune -f || true'
+            sh 'docker logout || true'
         }
+
         success {
-            echo "Deploy ${IMAGE_NAME}:${IMAGE_TAG} berhasil."
+            echo """
+                =================================
+                PIPELINE ANTRISEHAT BERHASIL!
+                Build Number : ${env.BUILD_NUMBER}
+                Image        : ${env.IMAGE}
+                Tag          : ${env.IMAGE_TAG}
+                =================================
+            """
         }
+
         failure {
-            echo 'Pipeline gagal — periksa console log stage terkait.'
+            echo """
+                =================================
+                PIPELINE ANTRISEHAT GAGAL!
+                Periksa Console Output.
+                =================================
+            """
         }
     }
 }
